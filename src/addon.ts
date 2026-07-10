@@ -406,6 +406,40 @@ function isBannedCategory(s?: string): boolean {
     return false;
 }
 
+// ---- Category "dossiers" (cross-country catalogs, e.g. Sport / Infos / TNT) ----
+type CategoryBucket = { id: string; name: string; keywords: RegExp };
+const CATEGORY_BUCKETS: CategoryBucket[] = [
+    { id: 'sport', name: 'Sport', keywords: /sport|calcio|foot|tennis|motor|f1\b|basket|nba|golf|rugby|boxe|combat|wrestl|ufc/i },
+    { id: 'infos', name: 'Infos', keywords: /news|infos?|actualit|giornal|notizie|informa/i },
+    { id: 'tnt', name: 'TNT / Généralistes', keywords: /tnt|general|mediaset|\brai\b|bbc|itv|nazional|national/i },
+    { id: 'cinema', name: 'Cinéma & Séries', keywords: /cinema|movie|film|serie|cin[ée]ma/i },
+    { id: 'kids', name: 'Jeunesse', keywords: /kids|junior|cartoon|bambini|enfant|jeunesse|disney/i },
+    { id: 'musique', name: 'Musique', keywords: /music|musica|musique/i },
+    { id: 'doc', name: 'Documentaires', keywords: /docu|discovery|nat ?geo|history/i },
+];
+const OTHER_BUCKET_ID = 'autres';
+// Order matters: first matching bucket wins
+function bucketForCategory(rawCat?: string): string {
+    if (!rawCat) return OTHER_BUCKET_ID;
+    for (const b of CATEGORY_BUCKETS) {
+        if (b.keywords.test(rawCat)) return b.id;
+    }
+    return OTHER_BUCKET_ID;
+}
+function buildCategoryCatalogId(bucketId: string): string {
+    return `vavoo_cat_${bucketId}`;
+}
+// Generates the manifest.catalogs entries for the category dossiers
+function categoryCatalogsList(namePrefix: string): any[] {
+    const all: { id: string; name: string }[] = [...CATEGORY_BUCKETS, { id: OTHER_BUCKET_ID, name: 'Autres' }];
+    return all.map(b => ({
+        id: buildCategoryCatalogId(b.id),
+        type: 'tv' as const,
+        name: `${namePrefix} • 📁 ${b.name}`,
+        extra: [{ name: 'search', isRequired: false }]
+    }));
+}
+
 // Static channels list for non-Italy (logos & categories)
 type StaticEntry = { name: string; country: string; logo?: string | null; category?: string | null };
 let staticByCountry: Record<string, StaticEntry[]> = {};
@@ -1196,6 +1230,8 @@ const manifest: Manifest = {
     // Explicitly include both 'vavoo' and 'vavoo_' so clients that match prefixes strictly will route streams here
     idPrefixes: ['vavoo', 'vavoo_'],
     catalogs: [
+        // TV catalogs by category (dossiers: Sport, Infos, TNT...), aggregated across countries
+        ...categoryCatalogsList('TvVoo'),
         // TV catalogs for Discovery (with genres)
         ...SUPPORTED_COUNTRIES.map(c => ({
             id: buildTvCatalogId(c.id),
@@ -1242,7 +1278,78 @@ if (VAVOO_DISABLE_EPG) {
 builder.defineCatalogHandler(async ({ id, type, extra }: { id: string; type: string; extra?: any }) => {
     try {
         console.log('[CATALOG] Request:', { id, type, extra: JSON.stringify(extra) });
-        
+
+        // Handle category "dossier" catalogs (Sport, Infos, TNT...), aggregated across ALL countries
+        if (id.startsWith('vavoo_cat_')) {
+            const bucketId = id.slice('vavoo_cat_'.length);
+            const catSearchQ: string = typeof (extra as any)?.search === 'string' ? String((extra as any).search).trim() : '';
+
+            (globalThis as any).__vavooCatMetasCache = (globalThis as any).__vavooCatMetasCache || {};
+            const catMetasCache: Record<string, { updatedAt: number; metas: any[] }> = (globalThis as any).__vavooCatMetasCache;
+            if (!catSearchQ) {
+                const cached = catMetasCache[bucketId];
+                if (cached && Array.isArray(cached.metas) && cached.metas.length > 0) {
+                    return { metas: cached.metas };
+                }
+            }
+
+            type CatRow = { it: any; baseName: string; countryId: string };
+            const allRows: CatRow[] = [];
+            for (const c of SUPPORTED_COUNTRIES) {
+                try {
+                    const items: any[] = await getOrFetchCountryCatalog(c.id);
+                    for (const it of items) {
+                        allRows.push({ it, baseName: cleanupChannelName(it?.name || 'Unknown'), countryId: c.id });
+                    }
+                } catch { }
+            }
+
+            let catRows = allRows.filter(r => {
+                const hint = getResolvedHint(r.countryId, r.baseName);
+                if (isBannedCategory(hint.cat)) return false;
+                return bucketForCategory(hint.cat) === bucketId;
+            });
+
+            if (catSearchQ) {
+                const qNorm = normalizeName(catSearchQ);
+                catRows = catRows.filter(r => normalizeName(r.baseName).includes(qNorm));
+            }
+            catRows.sort((a, b) => a.baseName.localeCompare(b.baseName, 'it', { sensitivity: 'base' }));
+
+            // Group by country+name to keep a single meta per channel while avoiding cross-country name clashes
+            const catGroups = new Map<string, { baseName: string; countryId: string }>();
+            for (const r of catRows) {
+                const key = `${r.countryId}:${r.baseName}`;
+                if (!catGroups.has(key)) catGroups.set(key, { baseName: r.baseName, countryId: r.countryId });
+            }
+
+            const catMetas = Array.from(catGroups.values()).map(({ baseName, countryId }) => {
+                const hint = getResolvedHint(countryId, baseName);
+                const fallbackArt = fallbackPosterAbsUrl || TVVOO_FALLBACK_ABS;
+                const actualLogoArt = hint.logo || undefined;
+                const logoArt = actualLogoArt || getPlaceholderLogo(baseName);
+                const posterArt = countryId === 'it'
+                    ? getItalyCoverPortrait(baseName) || getItalyGeneratedCoverPortrait(baseName) || actualLogoArt || getPlaceholderPoster(baseName)
+                    : getWorldCoverPortrait(baseName) || actualLogoArt || getPlaceholderPoster(baseName);
+                const backgroundArt = countryId === 'it'
+                    ? getItalyCoverLandscape(baseName) || getItalyGeneratedCoverLandscape(baseName) || actualLogoArt || fallbackArt || undefined
+                    : getWorldCoverLandscape(baseName) || actualLogoArt || fallbackArt || undefined;
+                return {
+                    id: `vavoo_${encodeURIComponent(baseName)}|group:${countryId}`,
+                    type: 'tv',
+                    name: baseName,
+                    poster: posterArt || actualLogoArt || getPlaceholderPoster(baseName),
+                    posterShape: 'poster' as any,
+                    logo: logoArt || getPlaceholderLogo(baseName),
+                    background: backgroundArt || actualLogoArt || fallbackArt || undefined,
+                    genres: (hint.cat && !isBannedCategory(hint.cat)) ? [hint.cat] : undefined
+                };
+            });
+
+            if (!catSearchQ && catMetas.length > 0) catMetasCache[bucketId] = { updatedAt: Date.now(), metas: catMetas };
+            return { metas: catMetas };
+        }
+
         // Handle standard TV catalogs, Home-enabled TV catalogs, and Search catalogs
         let country = SUPPORTED_COUNTRIES.find(c => id === buildTvCatalogId(c.id));
         let isSearchCatalog = false;
@@ -1844,6 +1951,8 @@ app.get('/cfg-:cfg/manifest.json', (req: Request, res: Response) => {
         const dyn = {
             ...manifest,
             catalogs: [
+                // TV catalogs by category (dossiers), aggregated across selected countries
+                ...categoryCatalogsList('TvVoo'),
                 // TV catalogs for Discovery
                 ...countries.map(c => {
                     const opts = categoriesOptionsForCountry(c.id);
@@ -1894,6 +2003,8 @@ app.get('/:cfg/manifest.json', (req: Request, res: Response) => {
         const dyn = {
             ...manifest,
             catalogs: [
+                // TV catalogs by category (dossiers), aggregated across selected countries
+                ...categoryCatalogsList('Vavoo TV'),
                 // TV catalogs for Discovery
                 ...countries.map(c => {
                     const opts = categoriesOptionsForCountry(c.id);
@@ -1929,6 +2040,8 @@ app.get('/manifest.json', (req: Request, res: Response) => {
     const dyn = {
         ...manifest,
         catalogs: [
+            // TV catalogs by category (dossiers), aggregated across selected countries
+            ...categoryCatalogsList('Vavoo TV'),
             // TV catalogs for Discovery
             ...countries.map(c => {
                 const opts = categoriesOptionsForCountry(c.id);
