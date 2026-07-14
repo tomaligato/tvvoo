@@ -32,6 +32,7 @@ services:
       - gluetun
     environment:
       - PORT=7860
+      - VAVOO_ACCESS_TOKEN=${VAVOO_ACCESS_TOKEN}
       # - VAVOO_DEBUG=1
 
 networks:
