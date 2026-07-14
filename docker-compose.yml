@@ -12,7 +12,7 @@ services:
     environment:
       - VPN_SERVICE_PROVIDER=custom
       - VPN_TYPE=wireguard
-      - WIREGUARD_PRIVATE_KEY=yourkey
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY}
       - WIREGUARD_ADDRESSES=10.2.0.2/32
       - WIREGUARD_PUBLIC_KEY=UIV6mDfDCun6PrjT7kFrpl02eEwqIa/piXoSKm1ybBU=
       - WIREGUARD_ENDPOINT_IP=89.39.107.113
