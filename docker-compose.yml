@@ -1,17 +1,38 @@
 services:
+  gluetun:
+    image: qmcgaw/gluetun
+    container_name: gluetun-tvvoo
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    restart: unless-stopped
+    ports:
+      - "7860:7860"   # port de tvvoo, publié via gluetun
+    environment:
+      - VPN_SERVICE_PROVIDER=custom
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=iErFHdVqdpaxlOHIF59IDrDug1FUFXK5v57YSJmyVWI=
+      - WIREGUARD_ADDRESSES=10.2.0.2/32
+      - WIREGUARD_PUBLIC_KEY=UIV6mDfDCun6PrjT7kFrpl02eEwqIa/piXoSKm1ybBU=
+      - WIREGUARD_ENDPOINT_IP=89.39.107.113
+      - WIREGUARD_ENDPOINT_PORT=51820
+      - DNS_ADDRESS=10.2.0.1
+    networks:
+      - stremio_net
+
   tvvoo:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: tvvoo
     restart: unless-stopped
-    ports:
-      - "7860:7860"
+    network_mode: "service:gluetun"
+    depends_on:
+      - gluetun
     environment:
       - PORT=7860
       # - VAVOO_DEBUG=1
-    networks:
-      - stremio_net
 
 networks:
   stremio_net:
