@@ -1988,7 +1988,6 @@ app.set('trust proxy', true);
 // "?token=<TOKEN>" query param, otherwise the server responds 404 as if nothing existed here.
 // This makes the effective manifest URL unguessable without leaking that the addon exists.
 const VAVOO_ACCESS_TOKEN = (process.env.VAVOO_ACCESS_TOKEN || '').trim();
-console.log("VAVOO_ACCESS_TOKEN =", JSON.stringify(VAVOO_ACCESS_TOKEN));
 if (VAVOO_ACCESS_TOKEN) {
     app.use((req: Request, res: Response, next: NextFunction) => {
         try {
